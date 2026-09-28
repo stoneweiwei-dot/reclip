@@ -1,29 +1,36 @@
 # ReClip
 
-A self-hosted, open-source video and audio downloader with a clean web UI. Paste links from YouTube, TikTok, Instagram, Twitter/X, and 1000+ other sites — download as MP4 or MP3.
+ReClip is a self-hosted web archiver and media downloader.
 
-![Python](https://img.shields.io/badge/python-3.8+-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
+Paste a public URL and ReClip can now create a **single ZIP** containing the page's readable text, source HTML, discoverable images, direct audio/video files, yt-dlp media, and a machine-readable manifest. The original MP4 / MP3 downloader remains available.
 
-https://github.com/user-attachments/assets/419d3e50-c933-444b-8cab-a9724986ba05
+## What ZIP PAGE saves
 
-![ReClip MP3 Mode](assets/preview-mp3.png)
+For each URL:
 
-## Features
+- `content.md` — readable article/body text
+- `content.txt` — plain-text version
+- `source.html` — fetched source HTML
+- `images/` — discoverable `<img>`, `<picture>`, Open Graph/Twitter images, inline CSS background images, and embedded data-image assets
+- `media/` — direct `<video>`, `<audio>`, `<source>`, Open Graph media, direct media links, plus media found by yt-dlp
+- `manifest.json` — source URLs, local filenames, byte sizes, MIME types, skipped/failed items, and archive limits
 
-- Download videos from 1000+ supported sites (via [yt-dlp](https://github.com/yt-dlp/yt-dlp))
-- MP4 video or MP3 audio extraction
+Multiple pasted URLs are packed into one ZIP with one folder per page.
+
+## Existing media modes
+
+- MP4 video download
+- MP3 audio extraction
 - Quality/resolution picker
-- Bulk downloads — paste multiple URLs at once
+- Multiple media URLs
 - Automatic URL deduplication
-- Clean, responsive UI — no frameworks, no build step
-- Single Python file backend (~150 lines)
+- YouTube, TikTok, Instagram, X/Twitter, Reddit, Facebook, Vimeo, Twitch, SoundCloud and 1000+ yt-dlp-supported sites
 
-## Quick Start
+## Quick start
 
 ```bash
-brew install yt-dlp ffmpeg    # or apt install ffmpeg && pip install yt-dlp
-git clone https://github.com/averygan/reclip.git
+brew install yt-dlp ffmpeg
+git clone https://github.com/stoneweiwei-dot/reclip.git
 cd reclip
 ./reclip.sh
 ```
@@ -33,33 +40,53 @@ Open **http://localhost:8899**.
 Or with Docker:
 
 ```bash
-docker build -t reclip . && docker run -p 8899:8899 reclip
+docker build -t reclip .
+docker run -p 8899:8899 reclip
 ```
 
 ## Usage
 
-1. Paste one or more video URLs into the input box
-2. Choose **MP4** (video) or **MP3** (audio)
-3. Click **Fetch** to load video info and thumbnails
-4. Select quality/resolution if available
-5. Click **Download** on individual videos, or **Download All**
+### Archive a whole page
 
-## Supported Sites
+1. Leave **ZIP PAGE** selected.
+2. Paste one or more public `http://` or `https://` URLs.
+3. Click **Create ZIP**.
+4. ReClip extracts text and page assets, then downloads the ZIP automatically. A **Save ZIP** button remains available afterward.
 
-Anything [yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md), including:
+### Download media only
 
-YouTube, TikTok, Instagram, Twitter/X, Reddit, Facebook, Vimeo, Twitch, Dailymotion, SoundCloud, Loom, Streamable, Pinterest, Tumblr, Threads, LinkedIn, and many more.
+1. Select **MP4** or **MP3**.
+2. Paste one or more media URLs.
+3. Click **Fetch**.
+4. Choose video quality when available.
+5. Click **Download**.
+
+## Archive limits
+
+Defaults can be changed with environment variables:
+
+- `RECLIP_ARCHIVE_MAX_MB=1024` — total extracted bytes per ZIP job
+- `RECLIP_ASSET_MAX_MB=512` — maximum size of one fetched image/media asset
+- `RECLIP_PAGE_MAX_MB=25` — maximum fetched HTML/page response
+- `RECLIP_HTTP_TIMEOUT=45` — HTTP read timeout in seconds
+
+ReClip rejects localhost, private, link-local and other non-public network targets before fetching. Redirect targets are revalidated.
+
+## Important extraction limits
+
+ReClip works from the HTML returned to the server and from yt-dlp. Pages whose content exists only after JavaScript execution, requires login/cookies, uses anti-bot challenges, or hides assets behind expiring authenticated URLs may not be fully extractable. Failed/skipped asset URLs are recorded in `manifest.json`.
 
 ## Stack
 
-- **Backend:** Python + Flask (~150 lines)
-- **Frontend:** Vanilla HTML/CSS/JS (single file, no build step)
-- **Download engine:** [yt-dlp](https://github.com/yt-dlp/yt-dlp) + [ffmpeg](https://ffmpeg.org/)
-- **Dependencies:** 2 (Flask, yt-dlp)
+- Python + Flask
+- Beautiful Soup 4
+- Requests
+- yt-dlp + ffmpeg
+- Vanilla HTML/CSS/JS
 
 ## Disclaimer
 
-This tool is intended for personal use only. Please respect copyright laws and the terms of service of the platforms you download from. The developers are not responsible for any misuse of this tool.
+Use ReClip only for content you are allowed to save. Respect copyright, access controls, website terms, and applicable law.
 
 ## License
 
