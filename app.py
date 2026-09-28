@@ -6,33 +6,25 @@ import subprocess
 import threading
 from flask import Flask, request, jsonify, send_file, render_template
 
+from archiver import run_archive, validate_public_url
+
 app = Flask(__name__)
 DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), "downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
 jobs = {}
 
 
 def parse_ytdlp_json(stdout):
-    """Parse yt-dlp JSON output.
-
-    With ``-j`` yt-dlp prints one JSON object per line. Some extractors
-    emit multiple videos even with ``--no-playlist``, so stdout contains
-    several objects and a plain ``json.loads`` raises "Extra data".
-    Return the first valid object.
-    """
     for line in stdout.splitlines():
         line = line.strip()
-        if not line:
-            continue
-        return json.loads(line)
+        if line:
+            return json.loads(line)
     raise ValueError("yt-dlp returned no data")
 
 
 def run_download(job_id, url, format_choice, format_id):
     job = jobs[job_id]
     out_template = os.path.join(DOWNLOAD_DIR, f"{job_id}.%(ext)s")
-
     cmd = ["yt-dlp", "--no-playlist", "-o", out_template]
 
     if format_choice == "audio":
@@ -41,7 +33,6 @@ def run_download(job_id, url, format_choice, format_id):
         cmd += ["-f", f"{format_id}+bestaudio/best", "--merge-output-format", "mp4"]
     else:
         cmd += ["-f", "bestvideo+bestaudio/best", "--merge-output-format", "mp4"]
-
     cmd.append(url)
 
     try:
@@ -57,17 +48,14 @@ def run_download(job_id, url, format_choice, format_id):
             job["error"] = "Download completed but no file was found"
             return
 
-        if format_choice == "audio":
-            target = [f for f in files if f.endswith(".mp3")]
-            chosen = target[0] if target else files[0]
-        else:
-            target = [f for f in files if f.endswith(".mp4")]
-            chosen = target[0] if target else files[0]
+        preferred_ext = ".mp3" if format_choice == "audio" else ".mp4"
+        matches = [f for f in files if f.endswith(preferred_ext)]
+        chosen = matches[0] if matches else files[0]
 
-        for f in files:
-            if f != chosen:
+        for path in files:
+            if path != chosen:
                 try:
-                    os.remove(f)
+                    os.remove(path)
                 except OSError:
                     pass
 
@@ -75,7 +63,6 @@ def run_download(job_id, url, format_choice, format_id):
         job["file"] = chosen
         ext = os.path.splitext(chosen)[1]
         title = job.get("title", "").strip()
-        # Sanitize title for filename
         if title:
             safe_title = "".join(c for c in title if c not in r'\/:*?"<>|').strip()[:100].strip()
             job["filename"] = f"{safe_title}{ext}" if safe_title else os.path.basename(chosen)
@@ -84,9 +71,9 @@ def run_download(job_id, url, format_choice, format_id):
     except subprocess.TimeoutExpired:
         job["status"] = "error"
         job["error"] = "Download timed out (5 min limit)"
-    except Exception as e:
+    except Exception as exc:
         job["status"] = "error"
-        job["error"] = str(e)
+        job["error"] = str(exc)
 
 
 @app.route("/")
@@ -94,9 +81,51 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/api/archive", methods=["POST"])
+def start_archive():
+    data = request.json or {}
+    urls = data.get("urls") or []
+    if isinstance(urls, str):
+        urls = [urls]
+
+    clean = []
+    seen = set()
+    for raw in urls:
+        url = str(raw).strip()
+        if url and url not in seen:
+            seen.add(url)
+            clean.append(url)
+
+    if not clean:
+        return jsonify({"error": "No URL provided"}), 400
+    if len(clean) > 50:
+        return jsonify({"error": "Maximum 50 URLs per archive job"}), 400
+
+    try:
+        for url in clean:
+            validate_public_url(url)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    job_id = uuid.uuid4().hex[:10]
+    jobs[job_id] = {
+        "status": "downloading",
+        "type": "archive",
+        "urls": clean,
+        "progress": "Queued",
+    }
+    thread = threading.Thread(
+        target=run_archive,
+        args=(job_id, clean, jobs, DOWNLOAD_DIR),
+        daemon=True,
+    )
+    thread.start()
+    return jsonify({"job_id": job_id})
+
+
 @app.route("/api/info", methods=["POST"])
 def get_info():
-    data = request.json
+    data = request.json or {}
     url = data.get("url", "").strip()
     if not url:
         return jsonify({"error": "No URL provided"}), 400
@@ -108,8 +137,6 @@ def get_info():
             return jsonify({"error": result.stderr.strip().split("\n")[-1]}), 400
 
         info = parse_ytdlp_json(result.stdout)
-
-        # Build quality options — keep best format per resolution
         best_by_height = {}
         for f in info.get("formats", []):
             height = f.get("height")
@@ -118,14 +145,11 @@ def get_info():
                 if height not in best_by_height or tbr > (best_by_height[height].get("tbr") or 0):
                     best_by_height[height] = f
 
-        formats = []
-        for height, f in best_by_height.items():
-            formats.append({
-                "id": f["format_id"],
-                "label": f"{height}p",
-                "height": height,
-            })
-        formats.sort(key=lambda x: x["height"], reverse=True)
+        formats = [
+            {"id": f["format_id"], "label": f"{height}p", "height": height}
+            for height, f in best_by_height.items()
+        ]
+        formats.sort(key=lambda item: item["height"], reverse=True)
 
         return jsonify({
             "title": info.get("title", ""),
@@ -136,13 +160,13 @@ def get_info():
         })
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Timed out fetching video info"}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/playlist", methods=["POST"])
 def get_playlist_info():
-    data = request.json
+    data = request.json or {}
     url = data.get("url", "").strip()
     if not url:
         return jsonify({"error": "No URL provided"}), 400
@@ -155,32 +179,33 @@ def get_playlist_info():
 
         info = json.loads(result.stdout)
         entries = info.get("entries", [])
-        urls = [entry.get("url") for entry in entries if entry.get("url")]
-        return jsonify({"urls": urls})
+        return jsonify({"urls": [e.get("url") for e in entries if e.get("url")]})
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Timed out fetching playlist info"}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/download", methods=["POST"])
 def start_download():
-    data = request.json
+    data = request.json or {}
     url = data.get("url", "").strip()
-    format_choice = data.get("format", "video")
-    format_id = data.get("format_id")
-    title = data.get("title", "")
-
     if not url:
         return jsonify({"error": "No URL provided"}), 400
 
     job_id = uuid.uuid4().hex[:10]
-    jobs[job_id] = {"status": "downloading", "url": url, "title": title}
-
-    thread = threading.Thread(target=run_download, args=(job_id, url, format_choice, format_id))
-    thread.daemon = True
+    jobs[job_id] = {
+        "status": "downloading",
+        "url": url,
+        "title": data.get("title", ""),
+        "type": "media",
+    }
+    thread = threading.Thread(
+        target=run_download,
+        args=(job_id, url, data.get("format", "video"), data.get("format_id")),
+        daemon=True,
+    )
     thread.start()
-
     return jsonify({"job_id": job_id})
 
 
@@ -193,6 +218,9 @@ def check_status(job_id):
         "status": job["status"],
         "error": job.get("error"),
         "filename": job.get("filename"),
+        "progress": job.get("progress"),
+        "summary": job.get("summary"),
+        "type": job.get("type"),
     })
 
 

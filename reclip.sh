@@ -2,7 +2,6 @@
 set -e
 cd "$(dirname "$0")"
 
-# Check prerequisites
 missing=""
 
 if ! command -v python3 &> /dev/null; then
@@ -30,18 +29,16 @@ if [ -n "$missing" ]; then
     exit 1
 fi
 
-# Set up venv and install Python deps
 if [ ! -d "venv" ]; then
     echo "Setting up virtual environment..."
     python3 -m venv venv
-    source venv/bin/activate
-    pip install -q flask yt-dlp
-else
-    source venv/bin/activate
 fi
 
-# Keep yt-dlp fresh — sites (Instagram, Facebook, etc.) break its extractors
-# frequently, and the usual fix is simply updating yt-dlp. Skip with RECLIP_NO_UPDATE=1.
+source venv/bin/activate
+pip install -q -r requirements.txt
+
+# Keep yt-dlp fresh because supported sites regularly change their extractors.
+# Skip with RECLIP_NO_UPDATE=1.
 if [ -z "$RECLIP_NO_UPDATE" ]; then
     echo "Updating yt-dlp..."
     pip install -q -U yt-dlp || echo "  (couldn't update yt-dlp — continuing with the installed version)"
